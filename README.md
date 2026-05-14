@@ -109,6 +109,57 @@ data: {"type": "token",          "content": "Research Report"}
 data: {"type": "done"}
 ```
 
+## Logic — Pseudocode
+
+```text
+FUNCTION stream_research_pipeline(topic):
+
+    // ── Agent 1: Planner ──────────────────────────────────────
+    YIELD SSE → { type: "agent_start", agent: "planner" }
+
+    subtopics = GPT-4o.invoke_structured(
+        prompt  = "Break '{topic}' into 4 research subtopics",
+        schema  = ResearchPlan { subtopics: list[str] }
+    )
+
+    YIELD SSE → { type: "plan", subtopics: subtopics }
+
+
+    // ── Agent 2: Researcher (ReAct loop per subtopic) ─────────
+    YIELD SSE → { type: "agent_start", agent: "researcher" }
+
+    findings = []
+    FOR each subtopic in subtopics:
+        YIELD SSE → { type: "researching", subtopic }
+
+        messages = [SystemMessage, HumanMessage(subtopic)]
+
+        FOR up to MAX_ITERATIONS:
+            response = GPT-4o.invoke(messages, tools=[wikipedia, fetch_webpage])
+
+            IF response.tool_calls:
+                FOR each tool_call:
+                    result = execute tool_call
+                    APPEND ToolMessage(result) to messages
+            ELSE:
+                findings.APPEND({ subtopic, content: response })
+                BREAK
+
+        YIELD SSE → { type: "research_done", subtopic }
+
+
+    // ── Agent 3: Writer (streaming) ───────────────────────────
+    YIELD SSE → { type: "agent_start", agent: "writer" }
+
+    context = FORMAT all findings as markdown sections
+
+    STREAM GPT-4o.tokens(
+        prompt = "Write a research report on '{topic}' using:\n{context}"
+    ) → YIELD SSE { type: "token", content: chunk } per token
+
+    YIELD SSE → { type: "done" }
+```
+
 ## What This Demonstrates
 
 - **Multi-agent orchestration** — three specialist agents, each with a distinct role, model config, and capabilities

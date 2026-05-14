@@ -38,6 +38,11 @@ def _llm(model: str, streaming: bool = False) -> ChatOpenAI:
 
 
 async def _run_planner(topic: str) -> list[str]:
+    """Break ``topic`` into a list of focused subtopics using structured output.
+
+    Uses ``with_structured_output`` to guarantee a valid ``ResearchPlan`` response
+    without JSON parsing fragility.  Returns at most ``MAX_SUBTOPICS`` subtopics.
+    """
     structured = _llm(PLANNER_MODEL).with_structured_output(ResearchPlan)
     result: ResearchPlan = await structured.ainvoke([
         SystemMessage(content=(
@@ -50,6 +55,12 @@ async def _run_planner(topic: str) -> list[str]:
 
 
 async def _run_researcher(topic: str, subtopic: str) -> str:
+    """Research a single ``subtopic`` within ``topic`` using a ReAct tool loop.
+
+    Iterates up to ``RESEARCHER_MAX_ITERATIONS`` rounds of tool use (Wikipedia
+    search and webpage fetch).  Returns a 2-3 paragraph findings summary, or a
+    fallback string if the iteration limit is reached without a final answer.
+    """
     llm_with_tools = _llm(RESEARCHER_MODEL).bind_tools(
         [search_wikipedia, fetch_webpage]
     )
@@ -81,7 +92,17 @@ async def _run_researcher(topic: str, subtopic: str) -> str:
     return last.content if hasattr(last, "content") else "Research incomplete."
 
 
-async def stream_research_pipeline(topic: str) -> AsyncIterator[str]:
+async def stream_research_pipeline(topic: str) -> AsyncIterator[str]:  # type: ignore[override]
+    """Orchestrate the three-agent research pipeline and yield SSE events.
+
+    Pipeline: Planner → Researcher (×N subtopics) → Writer.
+    Each agent emits typed SSE events so the UI can render progress granularly.
+    Per-agent errors are isolated: a failing researcher yields a placeholder
+    rather than aborting the entire pipeline.
+
+    Event types emitted: ``agent_start``, ``plan``, ``researching``,
+    ``research_done``, ``token``, ``error``, ``done``.
+    """
     # ── Agent 1: Planner ────────────────────────────────────────────────────
     yield _sse({"type": "agent_start", "agent": "planner", "label": "Planning research subtopics…"})
     try:
